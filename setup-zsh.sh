@@ -3,18 +3,22 @@ set -euo pipefail
 
 account=$1
 container_name=$2
+profile=${3:-common}
 user_id=$(id -u "$account")
 user_home=$(getent passwd "$account" | cut -d: -f6)
 [[ $user_id -ne 0 && $user_home == /* && $container_name =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]
 
 # Instala o framework e a configuração com as permissões do usuário do contêiner.
-runuser -u "$account" -- /bin/bash -s -- "$user_home" "$container_name" <<'USER_SETUP'
+runuser -u "$account" -- /bin/bash -s -- "$user_home" "$container_name" "$profile" <<'USER_SETUP'
 set -euo pipefail
 umask 077
 export HOME=$1
 dot_dir=$HOME/.config/distrobox/zsh/$2
 omz_dir=$dot_dir/oh-my-zsh
 mkdir -p -- "$dot_dir/cache"
+if [[ $3 == development ]]; then
+    mkdir -p -- "$dot_dir/asdf"
+fi
 
 if [[ ! -s $omz_dir/oh-my-zsh.sh ]]; then
     if [[ -e $omz_dir || -L $omz_dir ]]; then
@@ -58,12 +62,26 @@ fi
 USER_SETUP
 
 # O Zsh lê este arquivo do contêiner antes de consultar os arquivos do usuário.
-cat > /etc/zsh/distrobox.zshenv <<ZSHENV
+{
+    cat <<ZSHENV
 if [[ -o rcs && \$EUID -eq $user_id ]]; then
     export SHELL=/usr/bin/zsh
     export ZDOTDIR="\$HOME/.config/distrobox/zsh/$container_name"
-fi
 ZSHENV
+    if [[ $profile == development ]]; then
+        cat <<'ASDF_CONFIG'
+    export ASDF_DATA_DIR="$ZDOTDIR/asdf"
+    typeset -U path
+    path=("$ASDF_DATA_DIR/shims" /usr/local/bin "${path[@]}")
+    if [[ -o interactive ]]; then
+        export EDITOR="${EDITOR:-vim}"
+        export VISUAL="${VISUAL:-$EDITOR}"
+        export PAGER="${PAGER:-less}"
+    fi
+ASDF_CONFIG
+    fi
+    printf 'fi\n'
+} > /etc/zsh/distrobox.zshenv
 source_line='source /etc/zsh/distrobox.zshenv'
 if ! grep -Fxq -- "$source_line" /etc/zsh/zshenv; then
     printf '\n%s\n' "$source_line" >> /etc/zsh/zshenv
